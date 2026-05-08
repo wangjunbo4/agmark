@@ -1,0 +1,13 @@
+[package]
+name = "agmark-tui"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "agmark-tui"
+path = "src/main.rs"
+
+[dependencies]
+agmark-core = { path = "../core" }
+ratatui = "0.29"
+crossterm = "0.28"

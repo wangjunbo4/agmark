@@ -1,0 +1,78 @@
+{
+  "name": "agmark",
+  "displayName": "AGMark Preview",
+  "description": "Interactive annotatable markdown preview for AI agent collaboration",
+  "version": "0.0.1",
+  "publisher": "agmark",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onLanguage:markdown"
+  ],
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "agmark.markdownPreview",
+        "displayName": "AGMark Preview",
+        "selector": [
+          {
+            "filenamePattern": "*.md"
+          }
+        ]
+      }
+    ],
+    "commands": [
+      {
+        "command": "agmark.init",
+        "title": "AGMark: Init Annotations",
+        "icon": "$(add)"
+      },
+      {
+        "command": "agmark.openPreview",
+        "title": "Open AGMark Preview",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "agmark.cleanAnnotations",
+        "title": "AGMark: Clean Annotations",
+        "icon": "$(clear-all)"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "agmark.openPreview",
+          "when": "resourceExtname == .md",
+          "group": "navigation"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "agmark.openPreview",
+          "when": "resourceExtname == .md",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.config.js",
+    "watch": "node esbuild.config.js --watch",
+    "lint": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "htm": "^3.1.1",
+    "markdown-it": "^14.0.0",
+    "preact": "^10.19.0"
+  }
+}

@@ -1,0 +1,21 @@
+# Rust build artifacts
+target/
+
+# Node dependencies
+node_modules/
+
+# VS Code extension build output
+vscode-extension/dist/
+
+# Claude Code session state
+.omc/
+
+# Claude Code local settings (keep commands)
+.claude/*
+!.claude/commands/
+
+# User annotation data (temporary review artifacts)
+.comments/
+
+# IDE
+.vscode/
