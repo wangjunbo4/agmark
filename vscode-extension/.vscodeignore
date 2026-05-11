@@ -1,0 +1,8 @@
+src/
+node_modules/
+*.config.ts
+*.config.js
+.gitignore
+.vscodeignore
+**/__tests__/**
+tsconfig.json

@@ -1,14 +1,27 @@
 {
   "name": "agmark",
-  "displayName": "AGMark Preview",
-  "description": "Interactive annotatable markdown preview for AI agent collaboration",
+  "displayName": "AGMark — Annotatable Markdown for AI Agents",
+  "description": "Interactive markdown review system. Select text to annotate, one-click send to Claude Code, MCP tools handle the rest.",
   "version": "0.0.1",
   "publisher": "agmark",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wangjunbo4/agmark"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
     "Other"
+  ],
+  "keywords": [
+    "markdown",
+    "annotation",
+    "review",
+    "ai",
+    "claude",
+    "mcp"
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
