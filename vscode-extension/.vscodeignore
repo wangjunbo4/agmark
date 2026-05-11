@@ -6,3 +6,9 @@ node_modules/
 .vscodeignore
 **/__tests__/**
 tsconfig.json
+.omc/
+.claude/
+.comments/
+target/
+package-lock.json
+*.vsix
