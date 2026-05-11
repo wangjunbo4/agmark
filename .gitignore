@@ -17,5 +17,8 @@ vscode-extension/dist/
 # User annotation data (temporary review artifacts)
 .comments/
 
+# Claude Code project instructions (local only)
+CLAUDE.md
+
 # IDE
 .vscode/
