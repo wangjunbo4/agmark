@@ -45,6 +45,13 @@ export class AnchorResolver {
         while (headingStack.length >= level) {
           headingStack.pop();
         }
+        // Add heading as a paragraph so it can be annotated/selected
+        paragraphs.push({
+          index: paragraphIndex++,
+          headingPath: [...headingStack],
+          content: title,
+          startLine: i,
+        });
         headingStack.push(title);
         paragraphStartLine = i;
         continue;

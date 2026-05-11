@@ -118,6 +118,17 @@ const TOOLS = [
         document: { type: 'string', description: 'Optional: specific markdown file' }
       }
     }
+  },
+  {
+    name: 'refresh_document',
+    description: 'Signal the VSCode extension to refresh the document and annotation state. Call this after completing a round of review edits.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        document: { type: 'string', description: 'Markdown file name to refresh' }
+      },
+      required: ['document']
+    }
   }
 ];
 
@@ -179,6 +190,18 @@ function handleListPending() {
     pendingCount: pending.reduce((s, p) => s + p.openCount, 0),
     documents: pending
   };
+}
+
+function handleRefreshDocument(params) {
+  const docName = params.document;
+  // Touch the comments file to trigger the VSCode file watcher
+  const data = readComments(projectRoot, docName);
+  if (data) {
+    writeComments(projectRoot, docName, data);
+  }
+  const open = data ? data.threads.filter(t => t.status === 'open').length : 0;
+  const total = data ? data.threads.length : 0;
+  return { document: docName, refreshed: true, open, total };
 }
 
 function handleGetStats(params) {
@@ -243,6 +266,7 @@ rl.on('line', (line) => {
           case 'reply_to_annotation': result = handleReply(args); break;
           case 'list_pending': result = handleListPending(); break;
           case 'get_stats': result = handleGetStats(args); break;
+          case 'refresh_document': result = handleRefreshDocument(args); break;
           default: return respondError(msg.id, -32601, 'Unknown tool: ' + name);
         }
         respond(msg.id, { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] });

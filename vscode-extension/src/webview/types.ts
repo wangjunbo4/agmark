@@ -12,6 +12,8 @@ export interface CommentAnchor {
   endOffset?: number;
   endParagraphIndex?: number;   // cross-paragraph: last paragraph index
   selectedText?: string;
+  startTCIdx?: number;          // text container index within the paragraph block
+  endTCIdx?: number;            // text container index for end paragraph
 }
 
 export interface Comment {
@@ -45,7 +47,7 @@ export interface CommentFile {
 }
 
 export type ExtensionToWebview =
-  | { type: 'init'; documentPath: string; documentContent: string; comments: CommentFile | null }
+  | { type: 'init'; documentPath: string; documentContent: string; comments: CommentFile | null; xdotoolAvailable: boolean }
   | { type: 'commentsUpdated'; comments: CommentFile };
 
 export type WebviewToExtension =
@@ -54,4 +56,5 @@ export type WebviewToExtension =
   | { type: 'resolveThread'; payload: { threadId: string } }
   | { type: 'reopenThread'; payload: { threadId: string } }
   | { type: 'deleteThread'; payload: { threadId: string } }
-  | { type: 'sendToClaude'; payload: { documentContent: string } };
+  | { type: 'sendToClaude'; payload: { documentContent: string } }
+  | { type: 'requestRefresh' };

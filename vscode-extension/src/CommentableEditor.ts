@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import { exec } from 'child_process';
 import { CommentEngine } from './CommentEngine';
 import { StorageManager } from './StorageManager';
 import type { ExtensionToWebview, WebviewToExtension, CommentFile } from './types';
@@ -37,6 +38,23 @@ export class AGMarkEditorProvider implements vscode.CustomTextEditorProvider {
       const documentPath = document.uri.fsPath;
       webviewPanel.webview.html = this.getWebviewHtml(webviewPanel.webview);
 
+      // Check xdotool availability (for automated paste-to-Claude).
+      // xdotool requires local X11 display — unavailable in Remote/SSH.
+      let xdotoolAvailable = false;
+      if (!process.env.VSCODE_REMOTE && process.env.DISPLAY) {
+        xdotoolAvailable = await checkXdotool();
+        if (!xdotoolAvailable && process.platform === 'linux') {
+          const install = await vscode.window.showWarningMessage(
+            'AGMark: xdotool not found. Install for one-click "Ask Claude"?',
+            'Install', 'Ignore',
+          );
+          if (install === 'Install') {
+            await tryInstallXdotool();
+            xdotoolAvailable = await checkXdotool();
+          }
+        }
+      }
+
       // Track disposal to avoid posting to dead webview
       let disposed = false;
       const safePost = (msg: ExtensionToWebview) => {
@@ -46,21 +64,24 @@ export class AGMarkEditorProvider implements vscode.CustomTextEditorProvider {
       };
 
       let latestComments: CommentFile | null = await this.storage.read(documentPath);
-      let initSent = false;
-      let fallbackTimer: ReturnType<typeof setTimeout>;
 
-      const sendInit = () => {
-        if (initSent || disposed) return;
-        initSent = true;
-        safePost({ type: 'init', documentPath, documentContent: document.getText(), comments: latestComments });
+      const sendRefresh = (doc?: vscode.TextDocument) => {
+        if (disposed) return;
+        const d = doc || document;
+        safePost({ type: 'init', documentPath, documentContent: d.getText(), comments: latestComments, xdotoolAvailable });
       };
 
       webviewPanel.webview.onDidReceiveMessage(async (msg: any) => {
         if (disposed) return;
         try {
           if (!msg || typeof msg !== 'object') return;
-          if (msg.type === 'ready') { console.log('[AGMark] webview ready'); sendInit(); return; }
-          console.log('[AGMark] received message:', msg.type, JSON.stringify(msg.payload?.anchor).substring(0, 200));
+          if (msg.type === 'ready') { console.log('[AGMark] webview ready'); sendRefresh(); return; }
+          if (msg.type === 'requestRefresh') {
+            latestComments = await this.storage.read(documentPath);
+            sendRefresh();
+            return;
+          }
+          console.log('[AGMark] received message:', msg.type, JSON.stringify(msg.payload).substring(0, 200));
           const result = await this.handleMessage(msg, documentPath, document.getText());
           console.log('[AGMark] handleMessage result:', result ? `${result.threads.length} threads` : 'null');
           if (result && !disposed) {
@@ -73,24 +94,32 @@ export class AGMarkEditorProvider implements vscode.CustomTextEditorProvider {
         }
       });
 
-      fallbackTimer = setTimeout(sendInit, 1500);
-
       let changeTimer: ReturnType<typeof setTimeout>;
       const changeListener = vscode.workspace.onDidChangeTextDocument((e) => {
         if (disposed || e.document.uri.fsPath !== documentPath) return;
         clearTimeout(changeTimer);
-        changeTimer = setTimeout(() => {
-          if (!disposed) {
-            safePost({ type: 'init', documentPath, documentContent: e.document.getText(), comments: latestComments });
-          }
-        }, 300);
+        changeTimer = setTimeout(() => sendRefresh(e.document), 300);
       });
+
+      // Watch .comments/ file for external changes (e.g. MCP writes)
+      const commentsUri = vscode.Uri.file(
+        path.join(path.dirname(documentPath), '.comments', path.basename(documentPath) + '.json')
+      );
+      const commentsWatcher = vscode.workspace.createFileSystemWatcher(commentsUri.fsPath);
+      const onCommentsChanged = async () => {
+        if (disposed) return;
+        await new Promise(r => setTimeout(r, 200)); // debounce
+        latestComments = await this.storage.read(documentPath);
+        sendRefresh();
+      };
+      commentsWatcher.onDidChange(onCommentsChanged);
+      commentsWatcher.onDidCreate(onCommentsChanged);
 
       webviewPanel.onDidDispose(() => {
         disposed = true;
         changeListener.dispose();
+        commentsWatcher.dispose();
         clearTimeout(changeTimer);
-        clearTimeout(fallbackTimer);
       });
     } catch (err) {
       console.error('[AGMark] resolveCustomTextEditor failed:', err);
@@ -152,19 +181,21 @@ export class AGMarkEditorProvider implements vscode.CustomTextEditorProvider {
     const docName = path.basename(documentPath);
     const prompt = `list_pending and get_annotations for ${docName}, address each open thread`;
 
-    // Open Claude Code sidebar + copy prompt
+    // 1. Copy prompt to clipboard
     await vscode.env.clipboard.writeText(prompt);
+
+    // 2. Focus the existing Claude Code sidebar input
     try {
-      await vscode.commands.executeCommand('claude-vscode.sidebar.open');
-    } catch {
-      // Fallback: generic chat
-      try {
-        await vscode.commands.executeCommand('workbench.action.chat.open', { query: prompt });
-      } catch { /* ignore */ }
+      await vscode.commands.executeCommand('claude-vscode.focus');
+    } catch { /* Claude Code extension not available */ }
+
+    // 3. Try automated paste+Enter, fall back to manual
+    const sent = await tryAutoSend(prompt);
+    if (sent) {
+      vscode.window.showInformationMessage(`AGMark: ${openThreads.length} open thread(s) → Claude Code`);
+    } else {
+      vscode.window.showInformationMessage(`AGMark: ${openThreads.length} open. Cmd+V Enter in Claude sidebar to send.`);
     }
-    vscode.window.showInformationMessage(
-      `AGMark: ${openThreads.length} open. Paste (Cmd+V) in Claude to process.`,
-    );
   }
 
   private getWebviewHtml(webview: vscode.Webview): string {
@@ -218,6 +249,9 @@ export class AGMarkEditorProvider implements vscode.CustomTextEditorProvider {
     .agmark-text-hl{border-radius:2px}
     .agmark-text-open{background:rgba(255,213,79,0.35);border-bottom:2px solid rgba(255,180,0,0.6)}
     .agmark-text-resolved{background:rgba(76,175,80,0.18);border-bottom:2px solid rgba(76,175,80,0.4)}
+    .agmark-temp-sel{background:rgba(100,180,255,0.35);border-radius:2px;border-bottom:2px solid rgba(100,180,255,0.7)}
+    .agmark-preview ::selection{background:rgba(100,180,255,0.45);color:#fff;text-shadow:0 1px 2px rgba(0,0,0,0.3)}
+    .agmark-preview ::-moz-selection{background:rgba(100,180,255,0.45);color:#fff;text-shadow:0 1px 2px rgba(0,0,0,0.3)}
   </style>
 </head>
 <body>
@@ -226,4 +260,38 @@ export class AGMarkEditorProvider implements vscode.CustomTextEditorProvider {
 </body>
 </html>`;
   }
+}
+
+// ── xdotool helpers ──
+
+function checkXdotool(): Promise<boolean> {
+  return new Promise((resolve) => {
+    exec('xdotool --version', (err) => resolve(!err));
+  });
+}
+
+function tryInstallXdotool(): Promise<void> {
+  return new Promise((resolve) => {
+    const term = vscode.window.createTerminal('Install xdotool');
+    term.show();
+    term.sendText('sudo apt-get install -y xdotool 2>/dev/null || (sudo yum install -y xdotool 2>/dev/null) || (sudo dnf install -y xdotool 2>/dev/null)');
+    setTimeout(() => { term.dispose(); resolve(); }, 5000);
+  });
+}
+
+/**
+ * Try to auto-send the prompt to the focused Claude Code input.
+ * Uses xdotool on Linux (native), clipboard fallback on Remote/SSH.
+ */
+function tryAutoSend(prompt: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    // VSCode Remote (SSH/Container) has no X11 — xdotool can't work
+    if (process.env.VSCODE_REMOTE || !process.env.DISPLAY) {
+      resolve(false);
+      return;
+    }
+    exec('xdotool key --clearmodifiers ctrl+v Return', (err) => {
+      resolve(!err);
+    });
+  });
 }

@@ -24,9 +24,10 @@ export function injectBlockAnchors(html: string): string {
 
 // — Browser-side: add data-block attributes to block elements —
 // IMPORTANT: must match the indexing produced by AnchorResolver.parseParagraphs().
-// We use UL/OL as atomic blocks (not LI) because the backend treats contiguous
-// list items as a single paragraph. We also don't recurse into block elements
-// to avoid double-counting nested blocks (e.g. <p> inside <li> or <blockquote>).
+// Headings ARE paragraphs (parseParagraphs now includes them), so all blockTags
+// get sequential data-block indices. We use UL/OL as atomic blocks (not LI)
+// because the backend treats contiguous list items as a single paragraph.
+// We don't recurse into block elements to avoid double-counting nested blocks.
 export function annotateBlocks(container: HTMLElement): void {
   let idx = 0;
   const stack: string[] = [];

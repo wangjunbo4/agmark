@@ -9,6 +9,8 @@ export interface CommentAnchor {
   endOffset?: number;
   endParagraphIndex?: number;   // cross-paragraph: last paragraph index
   selectedText?: string;
+  startTCIdx?: number;          // text container index within the paragraph block
+  endTCIdx?: number;            // text container index for end paragraph
 }
 
 export interface Comment {
@@ -49,6 +51,7 @@ export type ExtensionToWebview =
       documentPath: string;
       documentContent: string;
       comments: CommentFile | null;
+      xdotoolAvailable: boolean;
     }
   | {
       type: 'commentsUpdated';
@@ -93,6 +96,9 @@ export type WebviewToExtension =
       payload: {
         documentContent: string;
       };
+    }
+  | {
+      type: 'requestRefresh';
     };
 
 // ── Anchor resolution ──
