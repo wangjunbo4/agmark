@@ -11,6 +11,23 @@ export interface CommentAnchor {
   selectedText?: string;
   startTCIdx?: number;          // text container index within the paragraph block
   endTCIdx?: number;            // text container index for end paragraph
+  paragraphSnapshot?: string;   // full paragraph text at annotation time
+}
+
+export interface AnchorDrift {
+  status: 'intact' | 'minor' | 'major' | 'missing' | 'unknown';
+  similarity: number;           // 0-1, snapshot vs current paragraph text
+  snapshotText: string;         // original paragraph text
+  currentText: string;          // currently resolved paragraph text
+}
+
+export interface DriftSummary {
+  intact: number;
+  minor: number;
+  major: number;
+  majorDrifts: Array<{ threadId: string; snapshotText: string; currentText: string; similarity: number }>;
+  missing: number;
+  unknown: number;
 }
 
 export interface Comment {
@@ -27,6 +44,7 @@ export interface CommentThread {
   anchor: CommentAnchor;
   tags?: string[];
   comments: Comment[];
+  drift?: AnchorDrift;
   createdAt: string;
   updatedAt: string;
 }

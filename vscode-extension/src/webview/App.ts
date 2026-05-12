@@ -149,7 +149,7 @@ function App() {
 
     // Remove old block-level classes
     el.querySelectorAll('[data-block]').forEach((b) => {
-      b.classList.remove('agmark-has-threads', 'agmark-hl-open', 'agmark-hl-resolved');
+      b.classList.remove('agmark-has-threads', 'agmark-hl-open', 'agmark-hl-resolved', 'agmark-hl-drift-minor', 'agmark-hl-drift-major', 'agmark-hl-drift-missing', 'agmark-hl-drift-unknown');
     });
 
     if (allThreads.length === 0) return;
@@ -160,16 +160,45 @@ function App() {
       for (const tc of getTextContainers(blk)) highlightRange(tc, 0, tc.textContent?.length || 99999, cls);
     };
 
+    const driftTextClass = (t: typeof allThreads[0]): string => {
+      if (t.status !== 'resolved' || !t.drift) {
+        return t.status === 'open' ? 'agmark-text-hl agmark-text-open' : 'agmark-text-hl agmark-text-resolved';
+      }
+      switch (t.drift.status) {
+        case 'intact': return 'agmark-text-hl agmark-text-resolved';
+        case 'minor': return 'agmark-text-hl agmark-text-drift-minor';
+        case 'major': return 'agmark-text-hl agmark-text-drift-major';
+        case 'missing': return 'agmark-text-hl agmark-text-drift-missing';
+        default: return 'agmark-text-hl agmark-text-resolved';
+      }
+    };
+
+    const driftBlockClass = (t: typeof allThreads[0]): string | null => {
+      if (t.status !== 'resolved' || !t.drift) return t.status === 'open' ? 'agmark-hl-open' : 'agmark-hl-resolved';
+      switch (t.drift.status) {
+        case 'intact': return 'agmark-hl-resolved';
+        case 'minor': return 'agmark-hl-drift-minor';
+        case 'major': return 'agmark-hl-drift-major';
+        case 'missing': return 'agmark-hl-drift-missing';
+        default: return 'agmark-hl-resolved';
+      }
+    };
+
     for (const t of allThreads) {
-      const cls = t.status === 'open' ? 'agmark-text-hl agmark-text-open' : 'agmark-text-hl agmark-text-resolved';
+      const cls = driftTextClass(t);
       const { paragraphIndex: pIdx, endParagraphIndex: endPIdx, type, startOffset: so, endOffset: eo } = t.anchor;
       const endBlockIdx = endPIdx ?? pIdx;
       const startTCIdx = (t.anchor as any).startTCIdx ?? 0;
       const endTCIdx = (t.anchor as any).endTCIdx ?? 0;
 
-      // Add has-threads class to all involved blocks
+      // Add drift-aware block class to all involved blocks
+      const blkCls = driftBlockClass(t);
       for (let i = pIdx; i <= endBlockIdx; i++) {
-        (blocks[i] as HTMLElement | undefined)?.classList.add('agmark-has-threads');
+        const blk = blocks[i] as HTMLElement | undefined;
+        if (blk) {
+          blk.classList.add('agmark-has-threads');
+          if (blkCls) blk.classList.add(blkCls);
+        }
       }
 
       if (type !== 'selection' || eo == null) continue;
@@ -306,24 +335,29 @@ function App() {
         h('div', { style: { flex: 1, overflow: 'auto', padding: '8px' } },
           filtered.length === 0
             ? h('div', { style: { padding: '20px', textAlign: 'center', opacity: 0.5, fontSize: '13px' } }, 'No ' + s.filter + ' threads')
-            : filtered.map(t => h('div', {
-                key: t.id,
-                onClick: () => d({ t: 'thr', id: t.id }),
-                style: { padding: '8px', border: '1px solid #3c3c3c', borderRadius: '4px', marginBottom: '6px', cursor: 'pointer', background: s.activeId === t.id ? 'rgba(255,255,255,0.06)' : 'transparent' },
-              },
-              h('div', { style: { fontSize: '12px', fontWeight: 600, marginBottom: '4px' } },
-                t.status + ' · ' + (t.anchor.type === 'selection'
-                  ? '"' + truncate(t.anchor.selectedText || '', 30) + '"'
-                  : 'P' + (t.anchor.paragraphIndex + 1))),
-              h('div', { style: { fontSize: '13px', opacity: 0.7 } }, truncate(t.comments[0]?.body || '', 120)),
-              s.activeId === t.id ? h('div', { style: { marginTop: '8px', borderTop: '1px solid #3c3c3c', paddingTop: '8px' } },
-                t.comments.map(c => h('div', { key: c.id, style: { marginBottom: '6px' } },
-                  h('strong', { style: { fontSize: '12px' } }, c.author + ': '),
-                  h('span', { style: { fontSize: '13px' } }, c.body),
-                )),
-                h('button', { onClick: (e: Event) => { e.stopPropagation(); doDelete(t.id); }, style: { ...btnStyle, color: '#f44336' } }, 'Delete'),
-              ) : null,
-            ))
+            : filtered.map(t => {
+                const driftBorderColor = t.drift
+                  ? { intact: '#4caf50', minor: '#cddc39', major: '#ff9800', missing: '#f44336' }[t.drift.status] || 'transparent'
+                  : (t.status === 'open' ? '#ffb74d' : '#4caf50');
+                return h('div', {
+                  key: t.id,
+                  onClick: () => d({ t: 'thr', id: t.id }),
+                  title: t.drift ? `Drift: ${t.drift.status}` + (t.drift.similarity >= 0 ? ` (${Math.round(t.drift.similarity * 100)}%)` : '') : '',
+                  style: { padding: '8px', border: '1px solid #3c3c3c', borderLeft: '3px solid ' + driftBorderColor, borderRadius: '4px', marginBottom: '6px', cursor: 'pointer', background: s.activeId === t.id ? 'rgba(255,255,255,0.06)' : 'transparent' },
+                },
+                h('div', { style: { fontSize: '12px', fontWeight: 600, marginBottom: '4px' } },
+                  t.status + ' · ' + (t.anchor.type === 'selection'
+                    ? '"' + truncate(t.anchor.selectedText || '', 30) + '"'
+                    : 'P' + (t.anchor.paragraphIndex + 1))),
+                h('div', { style: { fontSize: '13px', opacity: 0.7 } }, truncate(t.comments[0]?.body || '', 120)),
+                s.activeId === t.id ? h('div', { style: { marginTop: '8px', borderTop: '1px solid #3c3c3c', paddingTop: '8px' } },
+                  t.comments.map(c => h('div', { key: c.id, style: { marginBottom: '6px' } },
+                    h('strong', { style: { fontSize: '12px' } }, c.author + ': '),
+                    h('span', { style: { fontSize: '13px' } }, c.body),
+                  )),
+                  h('button', { onClick: (e: Event) => { e.stopPropagation(); doDelete(t.id); }, style: { ...btnStyle, color: '#f44336' } }, 'Delete'),
+                ) : null,
+              );})
         ),
         // Comment bar
         h('div', { style: { flexShrink: 0, padding: '10px 12px', borderTop: '2px solid #3794ff', background: '#1e1e1e' } },

@@ -2,7 +2,7 @@
   "name": "agmark",
   "displayName": "AGMark — Annotatable Markdown for AI Agents",
   "description": "Interactive markdown review system. Select text to annotate, one-click send to Claude Code, MCP tools handle the rest.",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "publisher": "Gtylcara",
   "license": "MIT",
   "repository": {

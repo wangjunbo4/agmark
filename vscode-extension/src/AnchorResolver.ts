@@ -1,5 +1,5 @@
 import * as crypto from 'crypto';
-import type { CommentAnchor, ResolvedAnchor } from './types';
+import type { CommentAnchor, ResolvedAnchor, AnchorDrift, DriftSummary, CommentThread } from './types';
 
 interface Paragraph {
   index: number;
@@ -104,6 +104,88 @@ export class AnchorResolver {
   /** Extract text fingerprint (first 150 chars) */
   textFingerprint(content: string): string {
     return content.substring(0, 150).replace(/\s+/g, ' ').trim();
+  }
+
+  /**
+   * Public similarity computation using the three-strategy fuzzy match.
+   * Reuses the same weights as resolveByFuzzy: prefix 0.4 + Jaccard 0.35 + trigram 0.25.
+   */
+  computeSimilarity(textA: string, textB: string): number {
+    if (textA === textB) return 1.0;
+    if (!textA || !textB) return 0;
+
+    const fpA = this.textFingerprint(textA);
+    const fpB = this.textFingerprint(textB);
+
+    // Prefix edit distance (weight 0.4)
+    const prefixLen = Math.min(fpA.length, fpB.length);
+    const prefixA = fpA.substring(0, Math.min(60, prefixLen));
+    const prefixB = fpB.substring(0, Math.min(60, prefixLen));
+    const prefixScore = this.prefixSimilarity(prefixA, prefixB);
+
+    // Word Jaccard (weight 0.35)
+    const wordsA = new Set(fpA.toLowerCase().split(/\s+/).filter((w) => w.length > 2));
+    const wordsB = new Set(fpB.toLowerCase().split(/\s+/).filter((w) => w.length > 2));
+    const intersection = new Set([...wordsA].filter((w) => wordsB.has(w)));
+    const union = new Set([...wordsA, ...wordsB]);
+    const jaccardScore = union.size > 0 ? intersection.size / union.size : 0;
+
+    // Trigram Dice (weight 0.25)
+    const trigramScore = this.trigramDice(fpA.toLowerCase(), fpB.toLowerCase());
+
+    return prefixScore * 0.4 + jaccardScore * 0.35 + trigramScore * 0.25;
+  }
+
+  /**
+   * Detect how much a resolved anchor's paragraph has drifted from its snapshot.
+   */
+  detectDrift(anchor: CommentAnchor, resolved: ResolvedAnchor | null): AnchorDrift {
+    const fallback = { status: 'unknown' as const, similarity: -1, snapshotText: '', currentText: '' };
+    if (!anchor.paragraphSnapshot) return fallback;
+    if (!resolved) {
+      return { status: 'missing', similarity: 0, snapshotText: anchor.paragraphSnapshot, currentText: '' };
+    }
+    if (resolved.confidence === 1.0) {
+      return { status: 'intact', similarity: 1.0, snapshotText: anchor.paragraphSnapshot, currentText: resolved.content };
+    }
+    const sim = this.computeSimilarity(anchor.paragraphSnapshot, resolved.content);
+    if (sim >= 0.7) {
+      return { status: 'minor', similarity: sim, snapshotText: anchor.paragraphSnapshot, currentText: resolved.content };
+    }
+    return { status: 'major', similarity: sim, snapshotText: anchor.paragraphSnapshot, currentText: resolved.content };
+  }
+
+  /**
+   * Batch drift detection for all resolved threads in a document.
+   * Parses the document once, then resolves + detects drift for each thread.
+   */
+  batchDetectDrift(markdown: string, threads: CommentThread[]): DriftSummary {
+    const paragraphs = this.parseParagraphs(markdown);
+    const summary: DriftSummary = { intact: 0, minor: 0, major: 0, majorDrifts: [], missing: 0, unknown: 0 };
+
+    for (const thread of threads) {
+      if (thread.status === 'open') continue;
+      const resolved = this.resolve(thread.anchor, markdown);
+      const drift = this.detectDrift(thread.anchor, resolved);
+      thread.drift = drift;
+
+      switch (drift.status) {
+        case 'intact': summary.intact++; break;
+        case 'minor': summary.minor++; break;
+        case 'major':
+          summary.major++;
+          summary.majorDrifts.push({
+            threadId: thread.id,
+            snapshotText: drift.snapshotText,
+            currentText: drift.currentText,
+            similarity: drift.similarity,
+          });
+          break;
+        case 'missing': summary.missing++; break;
+        case 'unknown': summary.unknown++; break;
+      }
+    }
+    return summary;
   }
 
   // ── Level 1: Structural matching ──
@@ -279,6 +361,7 @@ export class AnchorResolver {
       contentHash: this.contentHash(paragraph.content),
       textFingerprint: this.textFingerprint(paragraph.content),
       confidence: 1.0,
+      paragraphSnapshot: paragraph.content,
     };
   }
 
@@ -312,6 +395,7 @@ export class AnchorResolver {
       contentHash: this.contentHash(paragraph.content),
       textFingerprint: fingerprint,
       confidence: 1.0,
+      paragraphSnapshot: paragraph.content,
     };
   }
 

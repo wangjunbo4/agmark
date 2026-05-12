@@ -1,6 +1,6 @@
 import { StorageManager } from './StorageManager';
 import { AnchorResolver } from './AnchorResolver';
-import type { CommentFile, CommentThread, Comment, CommentAnchor, ResolvedAnchor } from './types';
+import type { CommentFile, CommentThread, Comment, CommentAnchor, ResolvedAnchor, DriftSummary } from './types';
 
 let nextId = 0;
 function genId(prefix: string): string {
@@ -129,11 +129,15 @@ export class CommentEngine {
     return file;
   }
 
-  /** Re-resolve all anchors against the current document content */
-  refreshAnchors(documentPath: string, documentContent: string): CommentFile | null {
-    // This is a read-only check — returns the file with updated confidence
-    // but does not save. The caller decides what to do.
-    return null; // For MVP, handled by resolver in the frontend
+  /**
+   * Run batch drift detection on all resolved threads and return the
+   * updated file + a DriftSummary for Agent consumption.
+   * Does NOT persist — caller decides whether to save.
+   */
+  refreshDrift(documentContent: string, file: CommentFile): { file: CommentFile; summary: DriftSummary } {
+    const summary = this.resolver.batchDetectDrift(documentContent, file.threads);
+    file.updatedAt = new Date().toISOString();
+    return { file, summary };
   }
 
   /** Get stats for a comment file */

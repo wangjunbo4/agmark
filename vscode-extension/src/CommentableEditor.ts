@@ -64,11 +64,23 @@ export class AGMarkEditorProvider implements vscode.CustomTextEditorProvider {
       };
 
       let latestComments: CommentFile | null = await this.storage.read(documentPath);
+      // Run drift detection on load so the webview shows current drift status
+      if (latestComments) {
+        const result = this.engine.refreshDrift(document.getText(), latestComments);
+        latestComments = result.file;
+      }
 
       const sendRefresh = (doc?: vscode.TextDocument) => {
         if (disposed) return;
         const d = doc || document;
-        safePost({ type: 'init', documentPath, documentContent: d.getText(), comments: latestComments, xdotoolAvailable });
+        const comments = latestComments;
+        // Refresh drift against current document content before sending
+        if (comments) {
+          const updated = this.engine.refreshDrift(d.getText(), comments);
+          safePost({ type: 'init', documentPath, documentContent: d.getText(), comments: updated.file, xdotoolAvailable });
+        } else {
+          safePost({ type: 'init', documentPath, documentContent: d.getText(), comments: null, xdotoolAvailable });
+        }
       };
 
       webviewPanel.webview.onDidReceiveMessage(async (msg: any) => {
@@ -110,6 +122,10 @@ export class AGMarkEditorProvider implements vscode.CustomTextEditorProvider {
         if (disposed) return;
         await new Promise(r => setTimeout(r, 200)); // debounce
         latestComments = await this.storage.read(documentPath);
+        if (latestComments) {
+          const result = this.engine.refreshDrift(document.getText(), latestComments);
+          latestComments = result.file;
+        }
         sendRefresh();
       };
       commentsWatcher.onDidChange(onCommentsChanged);
@@ -160,6 +176,13 @@ export class AGMarkEditorProvider implements vscode.CustomTextEditorProvider {
       case 'sendToClaude':
         await this.sendToClaude(documentPath, msg.payload.documentContent);
         return null;
+      case 'refreshDrift': {
+        const file = await this.storage.read(documentPath);
+        if (!file) return null;
+        const result = this.engine.refreshDrift(documentContent, file);
+        await this.storage.save(documentPath, result.file);
+        return result.file;
+      }
       default:
         return null;
     }
@@ -179,7 +202,7 @@ export class AGMarkEditorProvider implements vscode.CustomTextEditorProvider {
     }
 
     const docName = path.basename(documentPath);
-    const prompt = `list_pending and get_annotations for ${docName}, address each open thread`;
+    const prompt = `list_pending and get_annotations for ${docName}, address each open thread. After resolving open threads, call refresh_drift for ${docName} to update drift status of resolved annotations.`;
 
     // 1. Copy prompt to clipboard
     await vscode.env.clipboard.writeText(prompt);
@@ -239,16 +262,23 @@ export class AGMarkEditorProvider implements vscode.CustomTextEditorProvider {
     [data-block].agmark-has-threads{border-left:2px solid #3794ff;padding-left:8px;cursor:pointer}
     [data-block].agmark-has-threads:hover{background:rgba(255,255,255,0.03)}
     [data-block].agmark-hl-sel{background:rgba(100,180,255,0.18)}
-    [data-block].agmark-hl-open{background:rgba(255,213,79,0.10)}
-    [data-block].agmark-hl-resolved{background:rgba(76,175,80,0.06)}
+    [data-block].agmark-hl-open{border-left:3px solid #ffb74d;padding-left:8px}
+    [data-block].agmark-hl-resolved{border-left:3px solid #4caf50;padding-left:8px}
     .agmark-badge{display:inline-flex;align-items:center;gap:3px;background:#4d4d4d;color:#fff;padding:1px 6px;border-radius:10px;font-size:10px;font-weight:600;margin-left:6px;cursor:pointer;vertical-align:middle}
     .agmark-badge:hover{background:#3794ff}
     .agmark-hl-sel{background:rgba(100,180,255,0.22)!important}
-    .agmark-hl-open{background:rgba(255,213,79,0.12)!important}
-    .agmark-hl-resolved{background:rgba(76,175,80,0.08)!important}
+    .agmark-hl-open{border-left:3px solid #ffb74d!important}
+    .agmark-hl-resolved{border-left:3px solid #4caf50!important}
     .agmark-text-hl{border-radius:2px}
     .agmark-text-open{background:rgba(255,213,79,0.35);border-bottom:2px solid rgba(255,180,0,0.6)}
     .agmark-text-resolved{background:rgba(76,175,80,0.18);border-bottom:2px solid rgba(76,175,80,0.4)}
+    .agmark-text-drift-minor{background:rgba(139,195,74,0.12);border-bottom:2px solid rgba(205,220,57,0.5)}
+    .agmark-text-drift-major{background:rgba(255,152,0,0.18);border-bottom:2px solid rgba(255,152,0,0.5)}
+    .agmark-text-drift-missing{border:1px dashed rgba(244,67,54,0.5);background:rgba(244,67,54,0.08)}
+    [data-block].agmark-hl-drift-minor{border-left:3px solid #cddc39;padding-left:8px}
+    [data-block].agmark-hl-drift-major{border-left:3px solid #ff9800;padding-left:8px}
+    [data-block].agmark-hl-drift-missing{border-left:3px dashed #f44336;padding-left:8px;background:rgba(244,67,54,0.04)}
+    [data-block].agmark-hl-drift-unknown{border-left:3px solid #9e9e9e;padding-left:8px}
     .agmark-temp-sel{background:rgba(100,180,255,0.35);border-radius:2px;border-bottom:2px solid rgba(100,180,255,0.7)}
     .agmark-preview ::selection{background:rgba(100,180,255,0.45);color:#fff;text-shadow:0 1px 2px rgba(0,0,0,0.3)}
     .agmark-preview ::-moz-selection{background:rgba(100,180,255,0.45);color:#fff;text-shadow:0 1px 2px rgba(0,0,0,0.3)}

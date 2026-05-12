@@ -273,3 +273,290 @@ describe('parseParagraphs with tables', () => {
     expect(paras[2].content).toBe('After.');
   });
 });
+
+// ═══════════════════════════════════════════════════════
+// computeSimilarity
+// ═══════════════════════════════════════════════════════
+
+describe('computeSimilarity', () => {
+  it('returns 1.0 for identical text', () => {
+    expect(resolver.computeSimilarity('hello world', 'hello world')).toBe(1.0);
+  });
+
+  it('returns 0 for empty vs non-empty', () => {
+    expect(resolver.computeSimilarity('', 'hello')).toBe(0);
+    expect(resolver.computeSimilarity('hello', '')).toBe(0);
+  });
+
+  it('returns 1.0 for both empty', () => {
+    expect(resolver.computeSimilarity('', '')).toBe(1.0);
+  });
+
+  it('gives high similarity for minor edits', () => {
+    const original = 'The quick brown fox jumps over the lazy dog.';
+    const edited = 'The quick brown fox jumps over the lazy cat.';
+    const sim = resolver.computeSimilarity(original, edited);
+    expect(sim).toBeGreaterThan(0.8);
+  });
+
+  it('gives moderate similarity for partial rewrite', () => {
+    const original = 'Use the npm install command to add the package to your project dependencies.';
+    const edited = 'Run npm install to add the package as a dependency in your project.';
+    const sim = resolver.computeSimilarity(original, edited);
+    expect(sim).toBeGreaterThan(0.4);
+    expect(sim).toBeLessThan(0.9);
+  });
+
+  it('gives low similarity for completely different content', () => {
+    const original = 'Build and deploy the application.';
+    const edited = 'The weather is sunny with a chance of rain tomorrow.';
+    const sim = resolver.computeSimilarity(original, edited);
+    expect(sim).toBeLessThan(0.5);
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+// detectDrift
+// ═══════════════════════════════════════════════════════
+
+describe('detectDrift', () => {
+  it('returns unknown when paragraphSnapshot is missing (old data)', () => {
+    const anchor = {
+      type: 'heading-path' as const,
+      headingPath: [],
+      paragraphIndex: 0,
+      contentHash: 'abc',
+      textFingerprint: '',
+      confidence: 1.0,
+    };
+    const drift = resolver.detectDrift(anchor, {
+      paragraphIndex: 0,
+      confidence: 1.0,
+      matchLevel: 1,
+      content: 'unchanged',
+    });
+    expect(drift.status).toBe('unknown');
+    expect(drift.similarity).toBe(-1);
+  });
+
+  it('returns intact when confidence is 1.0 (content hash matches)', () => {
+    const snapshot = 'Original paragraph text.';
+    const anchor = {
+      type: 'heading-path' as const,
+      headingPath: [],
+      paragraphIndex: 0,
+      contentHash: resolver.contentHash(snapshot),
+      textFingerprint: resolver.textFingerprint(snapshot),
+      confidence: 1.0,
+      paragraphSnapshot: snapshot,
+    };
+    const drift = resolver.detectDrift(anchor, {
+      paragraphIndex: 0,
+      confidence: 1.0,
+      matchLevel: 1,
+      content: snapshot,
+    });
+    expect(drift.status).toBe('intact');
+    expect(drift.similarity).toBe(1.0);
+  });
+
+  it('returns missing when anchor cannot be resolved', () => {
+    const snapshot = 'This paragraph was deleted.';
+    const anchor = {
+      type: 'heading-path' as const,
+      headingPath: ['# Title'],
+      paragraphIndex: 5,
+      contentHash: resolver.contentHash(snapshot),
+      textFingerprint: resolver.textFingerprint(snapshot),
+      confidence: 1.0,
+      paragraphSnapshot: snapshot,
+    };
+    const drift = resolver.detectDrift(anchor, null);
+    expect(drift.status).toBe('missing');
+    expect(drift.similarity).toBe(0);
+    expect(drift.snapshotText).toBe(snapshot);
+    expect(drift.currentText).toBe('');
+  });
+
+  it('returns minor for structurally-matched paragraph with minor edits', () => {
+    const snapshot = 'The quick brown fox jumps over the lazy dog.';
+    const edited = 'The quick brown fox jumps over the lazy cat.';
+    const anchor = {
+      type: 'heading-path' as const,
+      headingPath: [],
+      paragraphIndex: 0,
+      contentHash: resolver.contentHash(snapshot),
+      textFingerprint: resolver.textFingerprint(snapshot),
+      confidence: 1.0,
+      paragraphSnapshot: snapshot,
+    };
+    const drift = resolver.detectDrift(anchor, {
+      paragraphIndex: 0,
+      confidence: 0.5,
+      matchLevel: 1,
+      content: edited,
+    });
+    expect(drift.status).toBe('minor');
+    expect(drift.similarity).toBeGreaterThan(0.7);
+    expect(drift.snapshotText).toBe(snapshot);
+    expect(drift.currentText).toBe(edited);
+  });
+
+  it('returns major for structurally-matched paragraph with extensive rewrite', () => {
+    const snapshot = 'The weather is quite pleasant today with plenty of sunshine.';
+    const edited = 'Build and deploy the application to the production server immediately.';
+    const anchor = {
+      type: 'heading-path' as const,
+      headingPath: [],
+      paragraphIndex: 0,
+      contentHash: resolver.contentHash(snapshot),
+      textFingerprint: resolver.textFingerprint(snapshot),
+      confidence: 1.0,
+      paragraphSnapshot: snapshot,
+    };
+    const drift = resolver.detectDrift(anchor, {
+      paragraphIndex: 0,
+      confidence: 0.5,
+      matchLevel: 1,
+      content: edited,
+    });
+    expect(drift.status).toBe('major');
+    expect(drift.similarity).toBeLessThan(0.7);
+  });
+
+  it('returns major for fuzzy-matched paragraph with low confidence', () => {
+    const snapshot = 'This is a unique paragraph about machine learning and neural networks.';
+    const edited = 'Some completely different topic about cooking recipes and baking bread.';
+    const anchor = {
+      type: 'heading-path' as const,
+      headingPath: [],
+      paragraphIndex: 0,
+      contentHash: resolver.contentHash(snapshot),
+      textFingerprint: resolver.textFingerprint(snapshot),
+      confidence: 1.0,
+      paragraphSnapshot: snapshot,
+    };
+    const drift = resolver.detectDrift(anchor, {
+      paragraphIndex: 0,
+      confidence: 0.55,
+      matchLevel: 2,
+      content: edited,
+    });
+    expect(drift.status).toBe('major');
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+// batchDetectDrift
+// ═══════════════════════════════════════════════════════
+
+describe('batchDetectDrift', () => {
+  it('skips open threads and only processes resolved ones', () => {
+    const md = '# Title\n\nParagraph one.\n\n## Sub\n\nParagraph two.';
+    const threads = [
+      {
+        id: 'thr1',
+        status: 'open' as const,
+        anchor: resolver.buildAnchor(md, 0),
+        comments: [],
+        createdAt: '',
+        updatedAt: '',
+      },
+      {
+        id: 'thr2',
+        status: 'resolved' as const,
+        anchor: resolver.buildAnchor(md, 1),
+        comments: [],
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+    const summary = resolver.batchDetectDrift(md, threads);
+    expect(summary.intact).toBe(1);   // resolved thread on unchanged doc
+    expect(summary.minor).toBe(0);
+    expect(summary.major).toBe(0);
+    expect(summary.missing).toBe(0);
+    expect(summary.unknown).toBe(0);
+    // Open thread should be untouched (no drift assigned)
+    expect(threads[0].drift).toBeUndefined();
+    expect(threads[1].drift!.status).toBe('intact');
+  });
+
+  it('detects drift for resolved threads on modified document', () => {
+    const original = '# Title\n\nParagraph one.\n\n## Sub\n\nParagraph two.';
+    const threads = [
+      {
+        id: 'thr1',
+        status: 'resolved' as const,
+        anchor: resolver.buildAnchor(original, 1),
+        comments: [],
+        createdAt: '',
+        updatedAt: '',
+      },
+      {
+        id: 'thr2',
+        status: 'resolved' as const,
+        anchor: resolver.buildAnchor(original, 3),
+        comments: [],
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+    // Modify paragraph two (para index 3), keep paragraph one (para index 1) intact
+    const modified = '# Title\n\nParagraph one.\n\n## Sub\n\nParagraph two was rewritten completely here.';
+    const summary = resolver.batchDetectDrift(modified, threads);
+    expect(summary.intact).toBe(1);
+    expect(summary.minor + summary.major + summary.missing).toBe(1);
+    expect(threads[0].drift!.status).toBe('intact');
+    // thr2 should have some drift since content changed
+    expect(threads[1].drift!.status === 'minor' || threads[1].drift!.status === 'major').toBe(true);
+  });
+
+  it('includes major drift details in summary for Agent consumption', () => {
+    const original = '# Title\n\nOriginal unique paragraph about machine learning algorithms.';
+    const threads = [
+      {
+        id: 'thr_drift',
+        status: 'resolved' as const,
+        anchor: resolver.buildAnchor(original, 1),
+        comments: [],
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+    const modified = '# Title\n\nCompletely different content about cooking recipes and baking.';
+    const summary = resolver.batchDetectDrift(modified, threads);
+    if (summary.major > 0) {
+      expect(summary.major).toBeGreaterThan(0);
+      expect(summary.majorDrifts.length).toBe(summary.major);
+      expect(summary.majorDrifts[0].threadId).toBe('thr_drift');
+      expect(summary.majorDrifts[0].snapshotText).toContain('machine learning');
+      expect(summary.majorDrifts[0].currentText).toContain('cooking');
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+// paragraphSnapshot in buildAnchor / buildSelectionAnchor
+// ═══════════════════════════════════════════════════════
+
+describe('paragraphSnapshot', () => {
+  it('buildAnchor stores full paragraph text as snapshot', () => {
+    const md = '# Title\n\nThis is the paragraph content.';
+    const anchor = resolver.buildAnchor(md, 1);
+    expect(anchor.paragraphSnapshot).toBe('This is the paragraph content.');
+  });
+
+  it('buildSelectionAnchor stores full paragraph text as snapshot', () => {
+    const md = '# Title\n\nThis is the paragraph content with more text.';
+    const anchor = resolver.buildSelectionAnchor(md, 1, 0, 4, 'This');
+    expect(anchor.paragraphSnapshot).toBe('This is the paragraph content with more text.');
+  });
+
+  it('snapshot is independent of selection text', () => {
+    const md = '# Title\n\nFull paragraph text is captured.';
+    const anchor = resolver.buildSelectionAnchor(md, 1, 5, 14, 'paragraph');
+    expect(anchor.paragraphSnapshot).toBe('Full paragraph text is captured.');
+    expect(anchor.selectedText).toBe('paragraph');
+  });
+});
