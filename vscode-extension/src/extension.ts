@@ -3,11 +3,15 @@ import * as path from 'path';
 import { AGMarkEditorProvider } from './CommentableEditor';
 import { CommentEngine } from './CommentEngine';
 import { StorageManager } from './StorageManager';
+import { autoSetup } from './setup';
 
 export function activate(context: vscode.ExtensionContext) {
   console.log('[AGMark] EXTENSION ACTIVATED v' + (context.extension?.packageJSON?.version || '?'));
   const engine = new CommentEngine();
   const storage = new StorageManager();
+
+  // Auto-configure Claude Code integration on first activation
+  autoSetup(context);
 
   // Register the custom editor provider
   context.subscriptions.push(AGMarkEditorProvider.register(context));
