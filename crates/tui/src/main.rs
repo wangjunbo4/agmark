@@ -15,7 +15,6 @@ use ratatui::{Frame, Terminal};
 
 struct App {
     engine: CommentEngine,
-    storage: Storage,
     document_name: String,
     document_content: String,
     comments: CommentFile,
@@ -46,7 +45,6 @@ fn main() -> io::Result<()> {
     let root = Storage::find_project_root(&file_path)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     let engine = CommentEngine::new(&root);
-    let storage = Storage::new(&root);
     let comments = engine.get_or_create(&file_name, &content).unwrap_or_else(|_| {
         // Fallback: empty comments
         CommentFile {
@@ -64,7 +62,6 @@ fn main() -> io::Result<()> {
 
     let mut app = App {
         engine,
-        storage,
         document_name: file_name.to_string(),
         document_content: content,
         comments,
