@@ -27,13 +27,17 @@ interface State {
   activeId: string | null; filter: 'open' | 'resolved' | 'all';
   sel: SelInfo | null;
   xdotoolAvailable: boolean;
+  searchVisible: boolean; searchQuery: string; activeMatchIdx: number;
 }
 type Action =
   | { t: 'init'; dc: string; cm: CommentFile | null; xd: boolean }
   | { t: 'upd'; cm: CommentFile }
   | { t: 'thr'; id: string | null }
   | { t: 'fil'; f: 'open' | 'resolved' | 'all' }
-  | { t: 'sel'; s: SelInfo | null };
+  | { t: 'sel'; s: SelInfo | null }
+  | { t: 'search'; v: boolean; q?: string }
+  | { t: 'searchNext' }
+  | { t: 'searchPrev' };
 
 function reducer(s: State, a: Action): State {
   switch (a.t) {
@@ -42,13 +46,16 @@ function reducer(s: State, a: Action): State {
     case 'thr':  return { ...s, activeId: a.id };
     case 'fil':  return { ...s, filter: a.f, activeId: null };
     case 'sel':  return { ...s, sel: a.s };
+    case 'search': return { ...s, searchVisible: a.v, searchQuery: a.q ?? s.searchQuery, activeMatchIdx: a.v ? 0 : -1 };
+    case 'searchNext': return { ...s, activeMatchIdx: s.activeMatchIdx + 1 };
+    case 'searchPrev': return { ...s, activeMatchIdx: s.activeMatchIdx - 1 };
     default:     return s;
   }
 }
 
 // ── App ──
 function App() {
-  const [s, d] = useReducer(reducer, { docContent: '', comments: null, activeId: null, filter: 'open', sel: null, xdotoolAvailable: false });
+  const [s, d] = useReducer(reducer, { docContent: '', comments: null, activeId: null, filter: 'open', sel: null, xdotoolAvailable: false, searchVisible: false, searchQuery: '', activeMatchIdx: -1 });
   const ref = useRef<HTMLDivElement>(null);
 
   // Init
@@ -134,6 +141,30 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [s.docContent]);
 
+  // Ctrl+F / Escape keyboard handler
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'f' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        d({ t: 'search', v: true });
+        setTimeout(() => document.getElementById('agmark-search-input')?.focus(), 50);
+        return;
+      }
+      if (e.key === 'Escape' && s.searchVisible) {
+        d({ t: 'search', v: false, q: '' });
+        return;
+      }
+      if (e.key === 'Enter' && s.searchVisible && s.searchQuery) {
+        if (e.shiftKey) d({ t: 'searchPrev' });
+        else d({ t: 'searchNext' });
+        e.preventDefault();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.searchVisible, s.searchQuery]);
+
   // ── Derived ──
   const html = useMemo(() => renderMarkdown(s.docContent), [s.docContent]);
   const allThreads = s.comments?.threads || [];
@@ -149,7 +180,7 @@ function App() {
 
     // Remove old block-level classes
     el.querySelectorAll('[data-block]').forEach((b) => {
-      b.classList.remove('agmark-has-threads', 'agmark-hl-open', 'agmark-hl-resolved', 'agmark-hl-drift-minor', 'agmark-hl-drift-major', 'agmark-hl-drift-missing', 'agmark-hl-drift-unknown');
+      b.classList.remove('agmark-has-threads', 'agmark-hl-open', 'agmark-hl-resolved');
     });
 
     if (allThreads.length === 0) return;
@@ -160,38 +191,19 @@ function App() {
       for (const tc of getTextContainers(blk)) highlightRange(tc, 0, tc.textContent?.length || 99999, cls);
     };
 
-    const driftTextClass = (t: typeof allThreads[0]): string => {
-      if (t.status !== 'resolved' || !t.drift) {
-        return t.status === 'open' ? 'agmark-text-hl agmark-text-open' : 'agmark-text-hl agmark-text-resolved';
-      }
-      switch (t.drift.status) {
-        case 'intact': return 'agmark-text-hl agmark-text-resolved';
-        case 'minor': return 'agmark-text-hl agmark-text-drift-minor';
-        case 'major': return 'agmark-text-hl agmark-text-drift-major';
-        case 'missing': return 'agmark-text-hl agmark-text-drift-missing';
-        default: return 'agmark-text-hl agmark-text-resolved';
-      }
-    };
+    const driftTextClass = (t: typeof allThreads[0]): string =>
+      t.status === 'open' ? 'agmark-text-hl agmark-text-open' : 'agmark-text-hl agmark-text-resolved';
 
-    const driftBlockClass = (t: typeof allThreads[0]): string | null => {
-      if (t.status !== 'resolved' || !t.drift) return t.status === 'open' ? 'agmark-hl-open' : 'agmark-hl-resolved';
-      switch (t.drift.status) {
-        case 'intact': return 'agmark-hl-resolved';
-        case 'minor': return 'agmark-hl-drift-minor';
-        case 'major': return 'agmark-hl-drift-major';
-        case 'missing': return 'agmark-hl-drift-missing';
-        default: return 'agmark-hl-resolved';
-      }
-    };
+    const driftBlockClass = (t: typeof allThreads[0]): string | null =>
+      t.status === 'open' ? 'agmark-hl-open' : 'agmark-hl-resolved';
 
     for (const t of allThreads) {
       const cls = driftTextClass(t);
       const { paragraphIndex: pIdx, endParagraphIndex: endPIdx, type, startOffset: so, endOffset: eo } = t.anchor;
       const endBlockIdx = endPIdx ?? pIdx;
       const startTCIdx = (t.anchor as any).startTCIdx ?? 0;
-      const endTCIdx = (t.anchor as any).endTCIdx ?? 0;
+      const endTCIdx = (t.anchor as any).endTCIdx ?? startTCIdx;
 
-      // Add drift-aware block class to all involved blocks
       const blkCls = driftBlockClass(t);
       for (let i = pIdx; i <= endBlockIdx; i++) {
         const blk = blocks[i] as HTMLElement | undefined;
@@ -204,13 +216,11 @@ function App() {
       if (type !== 'selection' || eo == null) continue;
 
       if (pIdx === endBlockIdx) {
-        // Same block — may be cross-TC (e.g. table cells)
         highlightBlockRange(
           blocks[pIdx] as HTMLElement | undefined,
           startTCIdx, so ?? 0, endTCIdx, eo, cls,
         );
       } else {
-        // Cross-block: first block from startTC/offset to end, last block from start to endTC/offset
         const firstBlk = blocks[pIdx] as HTMLElement | undefined;
         const firstTCs = firstBlk ? getTextContainers(firstBlk) : [];
         highlightBlockRange(firstBlk, startTCIdx, so ?? 0, firstTCs.length - 1, 99999, cls);
@@ -237,10 +247,8 @@ function App() {
     };
 
     if (pIdx === endParagraphIdx) {
-      // Same block — may be cross-TC
       highlightBlockRange(blocks[pIdx] as HTMLElement | undefined, startTCIdx, startOffset, endTCIdx, endOffset, cls);
     } else {
-      // Cross-block
       const firstBlk = blocks[pIdx] as HTMLElement | undefined;
       const firstTCs = firstBlk ? getTextContainers(firstBlk) : [];
       highlightBlockRange(firstBlk, startTCIdx, startOffset, firstTCs.length - 1, 99999, cls);
@@ -248,6 +256,81 @@ function App() {
       highlightBlockRange(blocks[endParagraphIdx] as HTMLElement | undefined, 0, 0, endTCIdx, endOffset, cls);
     }
   }, [s.sel]);
+
+  // Search highlighting — useRef to persist match elements across renders
+  const searchMatchEls = useRef<Element[]>([]);
+  const searchMatchCount = useRef(0);
+
+  useEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+    // Clear previous search highlights
+    root.querySelectorAll('.agmark-search-hl').forEach((sp) => { const p = sp.parentNode; if (p) { while (sp.firstChild) p.insertBefore(sp.firstChild, sp); p.removeChild(sp); } });
+    root.normalize();
+    searchMatchEls.current = [];
+    searchMatchCount.current = 0;
+
+    if (!s.searchQuery) return;
+    const q = s.searchQuery.toLowerCase();
+    const preview = root.querySelector('.agmark-preview');
+    if (!preview) return;
+
+    // Walk text nodes in the preview and mark matches
+    const walker = document.createTreeWalker(preview, NodeFilter.SHOW_TEXT);
+    const textNodes: Text[] = [];
+    let n: Node | null;
+    while ((n = walker.nextNode())) {
+      // Skip text nodes inside script/style, and inside our own search marks
+      let parent = n.parentNode;
+      let skip = false;
+      while (parent && parent !== preview) {
+        if (parent.nodeType === 1) {
+          const tag = (parent as Element).tagName;
+          if (tag === 'SCRIPT' || tag === 'STYLE' || (parent as Element).classList.contains('agmark-search-hl')) { skip = true; break; }
+        }
+        parent = parent.parentNode;
+      }
+      if (!skip) textNodes.push(n as Text);
+    }
+    const els: Element[] = [];
+    for (const tn of textNodes) {
+      const txt = tn.textContent || '';
+      const lower = txt.toLowerCase();
+      let idx = 0;
+      const fragments: Array<Text | Element> = [];
+      while (idx < txt.length) {
+        const found = lower.indexOf(q, idx);
+        if (found === -1) { fragments.push(document.createTextNode(txt.substring(idx))); break; }
+        if (found > idx) fragments.push(document.createTextNode(txt.substring(idx, found)));
+        const mark = document.createElement('mark');
+        mark.className = 'agmark-search-hl';
+        mark.textContent = txt.substring(found, found + q.length);
+        fragments.push(mark);
+        els.push(mark);
+        idx = found + q.length;
+      }
+      if (fragments.length > 0) {
+        const parent = tn.parentNode!;
+        for (const f of fragments) parent.insertBefore(f, tn);
+        parent.removeChild(tn);
+      }
+    }
+    searchMatchEls.current = els;
+    searchMatchCount.current = els.length;
+  }, [html, s.searchQuery]);
+
+  // Scroll to active search match
+  useEffect(() => {
+    const els = searchMatchEls.current;
+    if (s.activeMatchIdx < 0 || els.length === 0) return;
+    els.forEach((el, i) => {
+      (el as HTMLElement).classList.toggle('agmark-search-active', i === s.activeMatchIdx % els.length);
+    });
+    const active = els[s.activeMatchIdx % els.length];
+    if (active) active.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [s.activeMatchIdx]);
+
+  const displayMatchIdx = s.activeMatchIdx >= 0 ? (s.activeMatchIdx % Math.max(searchMatchCount.current, 1)) + 1 : 0;
 
   // Submit
   const submit = (body: string) => {
@@ -305,19 +388,39 @@ function App() {
     vscode.postMessage({ type: 'requestRefresh' });
   };
 
+  const scrollToBlock = (pIdx: number) => {
+    const root = ref.current;
+    if (!root) return;
+    const block = root.querySelector(`[data-block="${pIdx}"]`) as HTMLElement | null;
+    if (block) {
+      block.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      block.style.transition = 'background 0.3s';
+      block.style.background = 'rgba(100,180,255,0.25)';
+      setTimeout(() => { block.style.background = ''; }, 800);
+    }
+  };
+
   // ── Render ──
   return h('div', { style: { display: 'flex', flexDirection: 'column', height: '100vh', fontFamily: 'var(--vscode-editor-font-family,sans-serif)', fontSize: '14px', color: '#d4d4d4', background: '#1e1e1e', overflow: 'hidden' } },
     // Header
-    h('div', { style: { display: 'flex', justifyContent: 'space-between', padding: '8px 16px', borderBottom: '1px solid #3c3c3c', flexShrink: 0 } },
-      h('span', { style: { fontWeight: 600 } }, 'AGMark'),
-      h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' } },
-        h('button', { onClick: doRefresh, style: btnStyle }, '↻'),
-        counts.open > 0 ? h('button', {
-          onClick: doAskClaude,
-          title: s.xdotoolAvailable ? 'Auto-send to Claude Code' : 'Copy prompt + focus Claude (Cmd+V Enter to send)',
-          style: { ...btnStyle, background: s.xdotoolAvailable ? '#0078d4' : '#c62828', color: '#fff', border: 'none' },
-        }, 'Ask Claude') : null,
-      ),
+    h('div', { style: { display: 'flex', justifyContent: 'space-between', padding: '8px 16px', borderBottom: '1px solid #3c3c3c', flexShrink: 0, gap: '8px' } },
+      h('span', { style: { fontWeight: 600, whiteSpace: 'nowrap' } }, 'AGMark'),
+      s.searchVisible
+        ? h('div', { style: { display: 'flex', gap: '4px', alignItems: 'center', flex: 1 } },
+            h('input', { id: 'agmark-search-input', style: { flex: 1, padding: '4px 8px', border: '1px solid #3794ff', borderRadius: '4px', background: '#3c3c3c', color: '#ccc', fontFamily: 'inherit', fontSize: '13px' }, placeholder: 'Find in document...', value: s.searchQuery, onInput: (e: Event) => d({ t: 'search', v: true, q: (e.target as HTMLInputElement).value }) }),
+            h('span', { style: { fontSize: '12px', opacity: 0.6, whiteSpace: 'nowrap', minWidth: '40px', textAlign: 'right' } }, s.searchQuery ? `${displayMatchIdx}/${searchMatchCount.current}` : ''),
+            h('button', { onClick: () => d({ t: 'searchPrev' }), style: { ...btnStyle, padding: '4px 6px' } }, '▲'),
+            h('button', { onClick: () => d({ t: 'searchNext' }), style: { ...btnStyle, padding: '4px 6px' } }, '▼'),
+            h('button', { onClick: () => d({ t: 'search', v: false, q: '' }), style: { ...btnStyle, padding: '4px 6px' } }, '✕'),
+          )
+        : h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' } },
+            h('button', { onClick: doRefresh, style: btnStyle }, '↻'),
+            counts.open > 0 ? h('button', {
+              onClick: doAskClaude,
+              title: s.xdotoolAvailable ? 'Auto-send to Claude Code' : 'Copy prompt + focus Claude (Cmd+V Enter to send)',
+              style: { ...btnStyle, background: s.xdotoolAvailable ? '#0078d4' : '#c62828', color: '#fff', border: 'none' },
+            }, 'Ask Claude') : null,
+          ),
     ),
     // Main
     h('div', { style: { display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 } },
@@ -336,17 +439,15 @@ function App() {
           filtered.length === 0
             ? h('div', { style: { padding: '20px', textAlign: 'center', opacity: 0.5, fontSize: '13px' } }, 'No ' + s.filter + ' threads')
             : filtered.map(t => {
-                const driftBorderColor = t.drift
-                  ? { intact: '#4caf50', minor: '#cddc39', major: '#ff9800', missing: '#f44336' }[t.drift.status] || 'transparent'
-                  : (t.status === 'open' ? '#ffb74d' : '#4caf50');
+                const borderColor = t.status === 'open' ? '#ffb74d' : '#4caf50';
                 return h('div', {
                   key: t.id,
-                  onClick: () => d({ t: 'thr', id: t.id }),
+                  onClick: () => { d({ t: 'thr', id: t.id }); scrollToBlock(t.anchor.paragraphIndex); },
                   title: t.drift ? `Drift: ${t.drift.status}` + (t.drift.similarity >= 0 ? ` (${Math.round(t.drift.similarity * 100)}%)` : '') : '',
-                  style: { padding: '8px', border: '1px solid #3c3c3c', borderLeft: '3px solid ' + driftBorderColor, borderRadius: '4px', marginBottom: '6px', cursor: 'pointer', background: s.activeId === t.id ? 'rgba(255,255,255,0.06)' : 'transparent' },
+                  style: { padding: '8px', border: '1px solid #3c3c3c', borderLeft: '3px solid ' + borderColor, borderRadius: '4px', marginBottom: '6px', cursor: 'pointer', background: s.activeId === t.id ? 'rgba(255,255,255,0.06)' : 'transparent' },
                 },
                 h('div', { style: { fontSize: '12px', fontWeight: 600, marginBottom: '4px' } },
-                  t.status + ' · ' + (t.anchor.type === 'selection'
+                  t.status + (t.drift && t.drift.status !== 'intact' ? ` (drift:${t.drift.status})` : '') + ' · ' + (t.anchor.type === 'selection'
                     ? '"' + truncate(t.anchor.selectedText || '', 30) + '"'
                     : 'P' + (t.anchor.paragraphIndex + 1))),
                 h('div', { style: { fontSize: '13px', opacity: 0.7 } }, truncate(t.comments[0]?.body || '', 120)),
@@ -355,6 +456,7 @@ function App() {
                     h('strong', { style: { fontSize: '12px' } }, c.author + ': '),
                     h('span', { style: { fontSize: '13px' } }, c.body),
                   )),
+                  t.drift ? h('div', { style: { fontSize: '11px', opacity: 0.5, marginTop: '4px' } }, `Drift: ${t.drift.status}` + (t.drift.similarity >= 0 ? ` (${Math.round(t.drift.similarity * 100)}%)` : '')) : null,
                   h('button', { onClick: (e: Event) => { e.stopPropagation(); doDelete(t.id); }, style: { ...btnStyle, color: '#f44336' } }, 'Delete'),
                 ) : null,
               );})

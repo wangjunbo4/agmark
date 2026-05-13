@@ -141,6 +141,75 @@ describe('findTextContainer', () => {
     const td = root.querySelector('td')!;
     expect(findTextContainer(td.firstChild!, root).tagName).toBe('TD');
   });
+
+  it('returns outermost text container when TCs are nested (TD > P > text)', () => {
+    // Bug: markdown table cells can contain <p> inside <td>
+    const table = document.createElement('table');
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    const p = document.createElement('p'); p.textContent = 'cell content';
+    td.appendChild(p); tr.appendChild(td); table.appendChild(tr);
+    const root = document.createElement('div'); root.appendChild(table);
+
+    const tc = findTextContainer(p.firstChild!, root);
+    // Must return TD (outermost TC), not P
+    expect(tc.tagName).toBe('TD');
+  });
+
+  it('returns outermost text container for LI > P > text (list cross-line bug)', () => {
+    // Bug: list items can have nested <p> — findTextContainer must return LI, not P
+    const ul = document.createElement('ul');
+    const li = document.createElement('li');
+    const p = document.createElement('p'); p.textContent = 'item text';
+    li.appendChild(p); ul.appendChild(li);
+    const root = document.createElement('div'); root.appendChild(ul);
+
+    const tc = findTextContainer(p.firstChild!, root);
+    expect(tc.tagName).toBe('LI');
+  });
+
+  it('returns outermost BLOCKQUOTE when text is in nested P inside BQ', () => {
+    const bq = document.createElement('blockquote');
+    const p = document.createElement('p'); p.textContent = 'quoted';
+    bq.appendChild(p);
+    const root = document.createElement('div'); root.appendChild(bq);
+
+    const tc = findTextContainer(p.firstChild!, root);
+    expect(tc.tagName).toBe('BLOCKQUOTE');
+  });
+
+  it('stops at data-block boundary — table in blockquote returns TD, not BQ', () => {
+    // BQ is both a block and a TC; TABLE inside it is also a block.
+    // findTextContainer must NOT overshoot past TABLE to BQ.
+    const bq = document.createElement('blockquote');
+    (bq as HTMLElement).dataset.block = '0'; // BQ is the block
+    const table = document.createElement('table');
+    const tr = document.createElement('tr');
+    const td = document.createElement('td'); td.textContent = 'cell';
+    tr.appendChild(td); table.appendChild(tr); bq.appendChild(table);
+    const root = document.createElement('div'); root.appendChild(bq);
+
+    // For text in TD: block is BQ (has data-block), outermost TC up to BQ is BQ itself
+    // Since BQ IS the block, findTextContainer returns BQ
+    const tc = findTextContainer(td.firstChild!, root);
+    expect(tc.tagName).toBe('BLOCKQUOTE');
+    // getTextContainers(BQ) returns [BQ], indexOfTC returns 0 — consistent
+    expect(indexOfTC(bq, tc)).toBe(0);
+  });
+
+  it('stops at TABLE as block — returns TD not any parent TC', () => {
+    // Normal table: TABLE is the block; should return TD, not overshoot
+    const table = document.createElement('table');
+    (table as HTMLElement).dataset.block = '2';
+    const tr = document.createElement('tr');
+    const td = document.createElement('td'); td.textContent = 'cell';
+    tr.appendChild(td); table.appendChild(tr);
+    const root = document.createElement('div'); root.appendChild(table);
+
+    const tc = findTextContainer(td.firstChild!, root);
+    expect(tc.tagName).toBe('TD');
+    expect(indexOfTC(table, tc)).toBe(0);
+  });
 });
 
 describe('getTextContainers', () => {
@@ -181,6 +250,38 @@ describe('indexOfTC', () => {
     expect(indexOfTC(table, cells[1])).toBe(1);
     expect(indexOfTC(table, cells[2])).toBe(2);
     expect(indexOfTC(table, cells[3])).toBe(3);
+  });
+
+  it('returns -1 when TC is a nested inner container not in the block\'s TC list', () => {
+    // Bug reproduction: markdown-it renders "| col |" as <table><tr><td><p>col</p></td></tr></table>
+    const table = document.createElement('table');
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    const p = document.createElement('p'); p.textContent = 'col';
+    td.appendChild(p); tr.appendChild(td); table.appendChild(tr);
+
+    // getTextContainers returns [TD] (outermost), not [TD, P]
+    const tcs = getTextContainers(table);
+    expect(tcs.length).toBe(1);
+    expect(tcs[0].tagName).toBe('TD');
+
+    // indexOfTC for the P should return -1 (P is NOT a TC in the block)
+    expect(indexOfTC(table, p)).toBe(-1);
+  });
+
+  it('returns -1 when TC is a nested P inside LI within UL', () => {
+    // Bug: LI with nested <p> — findTextContainer would return P but getTextContainers only has LI
+    const ul = document.createElement('ul');
+    const li = document.createElement('li');
+    const p = document.createElement('p'); p.textContent = 'item text';
+    li.appendChild(p); ul.appendChild(li);
+
+    const tcs = getTextContainers(ul);
+    expect(tcs.length).toBe(1);
+    expect(tcs[0].tagName).toBe('LI');
+
+    expect(indexOfTC(ul, p)).toBe(-1);  // P is nested, not in TC list
+    expect(indexOfTC(ul, li)).toBe(0);  // LI is the outermost TC
   });
 });
 
@@ -533,5 +634,248 @@ describe('clearTempHighlight', () => {
     expect(root.querySelector('.agmark-text-hl')).not.toBeNull();
     expect(root.textContent).toContain('perm');
     expect(root.textContent).toContain('temp');
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+// getTextContainers: nested TC regression (BUG REPRODUCTION)
+// ═══════════════════════════════════════════════════════
+
+describe('getTextContainers - nested TC deduplication', () => {
+  it('returns only TD (not P) when table cell contains <p>', () => {
+    // markdown-it renders table cell content in <p> when content is multiline
+    // e.g. | col | → <table><tr><td><p>col</p></td></tr></table>
+    const table = document.createElement('table');
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    const p = document.createElement('p'); p.textContent = 'cell content';
+    td.appendChild(p); tr.appendChild(td); table.appendChild(tr);
+
+    const tcs = getTextContainers(table);
+    expect(tcs.length).toBe(1);
+    expect(tcs[0].tagName).toBe('TD');
+  });
+
+  it('returns only LI (not P) when list item contains <p>', () => {
+    const ul = document.createElement('ul');
+    const li0 = document.createElement('li'); li0.textContent = 'plain item';
+    const li1 = document.createElement('li');
+    const p = document.createElement('p'); p.textContent = 'rich item';
+    li1.appendChild(p);
+    ul.appendChild(li0); ul.appendChild(li1);
+
+    const tcs = getTextContainers(ul);
+    expect(tcs.length).toBe(2);
+    expect(tcs[0].tagName).toBe('LI');
+    expect(tcs[1].tagName).toBe('LI');
+  });
+
+  it('returns only BLOCKQUOTE (not P) when blockquote contains <p>', () => {
+    const bq = document.createElement('blockquote');
+    const p = document.createElement('p'); p.textContent = 'quoted';
+    bq.appendChild(p);
+
+    const tcs = getTextContainers(bq);
+    // BLOCKQUOTE is itself a TC, so it returns [bq]
+    expect(tcs.length).toBe(1);
+    expect(tcs[0].tagName).toBe('BLOCKQUOTE');
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+// Full integration: list-with-nested-P cross-line selection
+// ═══════════════════════════════════════════════════════
+
+describe('list cross-line selection with nested P in LI (BUG REPRODUCTION)', () => {
+  it('finds correct outermost TCs and applies highlights across all LIs', () => {
+    // Reproduce markdown:  - item1\n  - item2\n  - item3
+    // markdown-it may produce: <li><p>item1</p></li><li><p>item2</p></li><li><p>item3</p></li>
+    const ul = document.createElement('ul');
+    (ul as HTMLElement).dataset.block = '0';
+    const lis: Element[] = [];
+    for (const txt of ['item1', 'item2', 'item3']) {
+      const li = document.createElement('li');
+      const p = document.createElement('p'); p.textContent = txt;
+      li.appendChild(p);
+      ul.appendChild(li);
+      lis.push(li);
+    }
+    const root = document.createElement('div'); root.appendChild(ul);
+
+    // Simulate selection from middle of item1 to middle of item3
+    const anchorNode = lis[0].querySelector('p')!.firstChild as Text; // "item1"
+    const focusNode = lis[2].querySelector('p')!.firstChild as Text;  // "item3"
+
+    // findTextContainer should return LI (outermost), not P
+    const anchorTC = findTextContainer(anchorNode, root);
+    const focusTC = findTextContainer(focusNode, root);
+    expect(anchorTC.tagName).toBe('LI');
+    expect(focusTC.tagName).toBe('LI');
+    expect(anchorTC).toBe(lis[0]);
+    expect(focusTC).toBe(lis[2]);
+
+    const block = findBlockAncestor(anchorNode, root);
+    expect(block).toBe(ul);
+
+    const startTCIdx = indexOfTC(ul, anchorTC);
+    const endTCIdx = indexOfTC(ul, focusTC);
+    expect(startTCIdx).toBe(0);
+    expect(endTCIdx).toBe(2);
+
+    const so = charOffsetIn(anchorTC as Element, anchorNode, 2); // "em1" starts at offset 2
+    const eo = charOffsetIn(focusTC as Element, focusNode, 3);   // "item3" offset 3
+
+    // Apply highlight across all three LIs
+    clearHighlights(root);
+    highlightBlockRange(ul, startTCIdx, so, endTCIdx, eo, 'agmark-text-hl agmark-text-open');
+
+    // All three LIs should have highlights
+    expect(lis[0].querySelector('span.agmark-text-hl')).not.toBeNull();
+    expect(lis[1].querySelector('span.agmark-text-hl')).not.toBeNull(); // <-- THIS WAS THE BUG
+    expect(lis[2].querySelector('span.agmark-text-hl')).not.toBeNull();
+    // Text preserved
+    expect(lis[0].textContent).toContain('item1');
+    expect(lis[1].textContent).toContain('item2');
+    expect(lis[2].textContent).toContain('item3');
+  });
+
+  it('finds correct TCs and applies highlights across simple LIs (no nested P)', () => {
+    // Simple case: <li>item1</li><li>item2</li><li>item3</li>
+    const ul = document.createElement('ul');
+    (ul as HTMLElement).dataset.block = '0';
+    const lis: Element[] = [];
+    for (const txt of ['item1', 'item2', 'item3']) {
+      const li = document.createElement('li'); li.textContent = txt;
+      ul.appendChild(li);
+      lis.push(li);
+    }
+    const root = document.createElement('div'); root.appendChild(ul);
+
+    const anchorNode = lis[0].firstChild as Text;
+    const focusNode = lis[2].firstChild as Text;
+
+    expect(findTextContainer(anchorNode, root).tagName).toBe('LI');
+    expect(findTextContainer(focusNode, root).tagName).toBe('LI');
+
+    const startTCIdx = indexOfTC(ul, findTextContainer(anchorNode, root));
+    const endTCIdx = indexOfTC(ul, findTextContainer(focusNode, root));
+    expect(startTCIdx).toBe(0);
+    expect(endTCIdx).toBe(2);
+
+    clearHighlights(root);
+    highlightBlockRange(ul, startTCIdx, 0, endTCIdx, 5, 'agmark-text-hl agmark-text-open');
+
+    expect(lis[0].querySelector('span.agmark-text-hl')).not.toBeNull();
+    expect(lis[1].querySelector('span.agmark-text-hl')).not.toBeNull();
+    expect(lis[2].querySelector('span.agmark-text-hl')).not.toBeNull();
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+// Table with nested P cell selection (BUG REPRODUCTION)
+// ═══════════════════════════════════════════════════════
+
+describe('table cell cross-selection with nested P in TD (BUG REPRODUCTION)', () => {
+  it('finds correct outermost TCs and highlights across table cells', () => {
+    // markdown-it table: | A | B | may produce <td><p>A</p></td><td><p>B</p></td>
+    const table = document.createElement('table');
+    (table as HTMLElement).dataset.block = '0';
+    const tr = document.createElement('tr');
+    const tds: Element[] = [];
+    for (const txt of ['Alpha', 'Beta', 'Gamma']) {
+      const td = document.createElement('td');
+      const p = document.createElement('p'); p.textContent = txt;
+      td.appendChild(p); tr.appendChild(td);
+      tds.push(td);
+    }
+    table.appendChild(tr);
+    const root = document.createElement('div'); root.appendChild(table);
+
+    const anchorNode = tds[0].querySelector('p')!.firstChild as Text;
+    const focusNode = tds[2].querySelector('p')!.firstChild as Text;
+
+    // findTextContainer must return TD, not P
+    const anchorTC = findTextContainer(anchorNode, root);
+    const focusTC = findTextContainer(focusNode, root);
+    expect(anchorTC.tagName).toBe('TD');
+    expect(focusTC.tagName).toBe('TD');
+
+    // getTextContainers must return only TDs (not Ps)
+    const tcs = getTextContainers(table);
+    expect(tcs.length).toBe(3);
+    tcs.forEach(tc => expect(tc.tagName).toBe('TD'));
+
+    // indexOfTC must find correct indices
+    expect(indexOfTC(table, anchorTC)).toBe(0);
+    expect(indexOfTC(table, focusTC)).toBe(2);
+
+    // Highlight across all three cells
+    clearHighlights(root);
+    highlightBlockRange(table, 0, 1, 2, 3, 'agmark-text-hl agmark-text-open');
+
+    expect(tds[0].querySelector('span.agmark-text-hl')).not.toBeNull();
+    expect(tds[1].querySelector('span.agmark-text-hl')).not.toBeNull();
+    expect(tds[2].querySelector('span.agmark-text-hl')).not.toBeNull();
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+// BUG: endTCIdx defaulting to 0 instead of startTCIdx
+// ═══════════════════════════════════════════════════════
+
+describe('highlightBlockRange endTCIdx default (BUG REPRODUCTION)', () => {
+  it('single-TC selection in non-first cell — endTCIdx defaults to startTCIdx', () => {
+    // Simulate a table with 4 cells. User selects text only in cell[2] (Gamma).
+    // submit() sets endTCIdx=undefined (since startTCIdx===endTCIdx).
+    // When read back, endTCIdx ?? 0 would be 0 — but should be startTCIdx (2).
+    const table = document.createElement('table');
+    (table as HTMLElement).dataset.block = '0';
+    const tr = document.createElement('tr');
+    const cells: Element[] = [];
+    for (const txt of ['Alpha', 'Beta', 'Gamma', 'Delta']) {
+      const td = document.createElement('td'); td.textContent = txt;
+      tr.appendChild(td);
+      cells.push(td);
+    }
+    table.appendChild(tr);
+    const root = document.createElement('div'); root.appendChild(table);
+
+    // Simulate read-back: startTCIdx=2, endTCIdx from anchor (undefined → should default to 2)
+    const startTCIdx = 2; // from saved anchor
+    const endTCIdx = undefined as any; // from saved anchor (single-TC selection)
+    const effectiveEnd = endTCIdx ?? startTCIdx; // THIS MUST BE startTCIdx, NOT 0
+
+    clearHighlights(root);
+    // Select "Gam" (offset 0-3) in cell[2]
+    highlightBlockRange(table, startTCIdx, 0, effectiveEnd, 3, 'agmark-text-hl agmark-text-open');
+
+    // Only cell[2] should have highlights; cells 0,1,3 should not
+    expect(cells[0].querySelector('span.agmark-text-hl')).toBeNull();  // Alpha
+    expect(cells[1].querySelector('span.agmark-text-hl')).toBeNull();  // Beta
+    expect(cells[2].querySelector('span.agmark-text-hl')).not.toBeNull(); // Gamma ✓
+    expect(cells[3].querySelector('span.agmark-text-hl')).toBeNull();  // Delta
+  });
+
+  it('endTCIdx defaulting to 0 would highlight wrong cell (demonstrate bug)', () => {
+    const table = document.createElement('table');
+    (table as HTMLElement).dataset.block = '0';
+    const tr = document.createElement('tr');
+    const cells: Element[] = [];
+    for (const txt of ['Alpha', 'Beta', 'Gamma', 'Delta']) {
+      const td = document.createElement('td'); td.textContent = txt;
+      tr.appendChild(td);
+      cells.push(td);
+    }
+    table.appendChild(tr);
+    const root = document.createElement('div'); root.appendChild(table);
+
+    clearHighlights(root);
+    // Old behavior: endTCIdx ?? 0 → 0, wraps from cell 2 back to cell 0
+    highlightBlockRange(table, 2, 0, 0, 3, 'agmark-text-hl agmark-text-open');
+
+    // WRONG: cell[0] gets highlighted even though selection was only in cell[2]
+    expect(cells[0].querySelector('span.agmark-text-hl')).not.toBeNull(); // BUG: wrong cell
+    expect(cells[2].querySelector('span.agmark-text-hl')).not.toBeNull(); // partially correct
+    // Cell[2] has highlight for "Gam" and cell[0] has highlight for "Alp" — the highlight is split
   });
 });

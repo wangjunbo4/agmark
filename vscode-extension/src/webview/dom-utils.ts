@@ -15,17 +15,23 @@ export function findBlockAncestor(node: Node, root: Element): Element | null {
   return null;
 }
 
-/** Find the closest text container element (for character offset calculation) */
+/** Find the outermost text container element within the block (for character offset calculation).
+ *  Must match getTextContainers() which only returns outermost TCs.
+ *  Stops at the data-block boundary — never returns a TC above the block. */
 export function findTextContainer(node: Node, root: Element): Element {
   let n: Node | null = node;
+  let found: Element | null = null;
   while (n && n !== root) {
-    if (n.nodeType === 1 && TEXT_TAGS.includes((n as Element).tagName)) return n as Element;
+    if (n.nodeType === 1 && TEXT_TAGS.includes((n as Element).tagName)) found = n as Element;
+    // Stop at data-block boundary — don't return TCs above the block
+    if (n.nodeType === 1 && (n as Element).hasAttribute('data-block')) break;
     n = n.parentNode;
   }
+  if (found) return found;
   // Fallback: if we reached root without finding a text container, the node
   // might be a whitespace text node between block children (e.g. between <li>s).
   // Walk up from the original node to the nearest data-block, then take its
-  // first/last text container depending on position.
+  // first text container.
   let fallback: Node | null = node;
   while (fallback && fallback !== root) {
     if (fallback.nodeType === 1 && (fallback as Element).hasAttribute('data-block')) {
@@ -42,15 +48,21 @@ export function blockIndex(el: Element): number {
   return parseInt((el as HTMLElement).dataset.block || '', 10);
 }
 
-/** Get all text containers within a block element, in document order */
+/** Get all text containers within a block element, in document order.
+ *  Only returns outermost TCs — if a TD contains a P, only TD is returned. */
 export function getTextContainers(block: Element): Element[] {
   if (TEXT_TAGS.includes(block.tagName)) return [block];
   const result: Element[] = [];
-  const walker = document.createTreeWalker(block, NodeFilter.SHOW_ELEMENT, {
-    acceptNode: (n) => TEXT_TAGS.includes((n as Element).tagName) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP,
-  });
-  let n: Node | null;
-  while ((n = walker.nextNode())) result.push(n as Element);
+  const all = block.querySelectorAll(TEXT_TAGS.join(','));
+  for (const el of all) {
+    let ancestor = el.parentElement;
+    let hasTCAncestor = false;
+    while (ancestor && ancestor !== block) {
+      if (TEXT_TAGS.includes(ancestor.tagName)) { hasTCAncestor = true; break; }
+      ancestor = ancestor.parentElement;
+    }
+    if (!hasTCAncestor) result.push(el);
+  }
   return result;
 }
 

@@ -161,6 +161,8 @@ export class AGMarkEditorProvider implements vscode.CustomTextEditorProvider {
                 endOffset: msg.payload.anchor.endOffset!,
                 selectedText: msg.payload.anchor.selectedText!,
                 endParagraphIndex: msg.payload.anchor.endParagraphIndex,
+                startTCIdx: (msg.payload.anchor as any).startTCIdx,
+                endTCIdx: (msg.payload.anchor as any).endTCIdx,
               }
             : undefined,
         );
@@ -272,13 +274,8 @@ export class AGMarkEditorProvider implements vscode.CustomTextEditorProvider {
     .agmark-text-hl{border-radius:2px}
     .agmark-text-open{background:rgba(255,213,79,0.35);border-bottom:2px solid rgba(255,180,0,0.6)}
     .agmark-text-resolved{background:rgba(76,175,80,0.18);border-bottom:2px solid rgba(76,175,80,0.4)}
-    .agmark-text-drift-minor{background:rgba(139,195,74,0.12);border-bottom:2px solid rgba(205,220,57,0.5)}
-    .agmark-text-drift-major{background:rgba(255,152,0,0.18);border-bottom:2px solid rgba(255,152,0,0.5)}
-    .agmark-text-drift-missing{border:1px dashed rgba(244,67,54,0.5);background:rgba(244,67,54,0.08)}
-    [data-block].agmark-hl-drift-minor{border-left:3px solid #cddc39;padding-left:8px}
-    [data-block].agmark-hl-drift-major{border-left:3px solid #ff9800;padding-left:8px}
-    [data-block].agmark-hl-drift-missing{border-left:3px dashed #f44336;padding-left:8px;background:rgba(244,67,54,0.04)}
-    [data-block].agmark-hl-drift-unknown{border-left:3px solid #9e9e9e;padding-left:8px}
+    .agmark-search-hl{background:rgba(255,179,0,0.45);color:#fff;border-radius:2px;padding:0 1px}
+    .agmark-search-active{background:rgba(255,100,0,0.7)!important;color:#fff;border-radius:2px;padding:0 1px}
     .agmark-temp-sel{background:rgba(100,180,255,0.35);border-radius:2px;border-bottom:2px solid rgba(100,180,255,0.7)}
     .agmark-preview ::selection{background:rgba(100,180,255,0.45);color:#fff;text-shadow:0 1px 2px rgba(0,0,0,0.3)}
     .agmark-preview ::-moz-selection{background:rgba(100,180,255,0.45);color:#fff;text-shadow:0 1px 2px rgba(0,0,0,0.3)}

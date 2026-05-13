@@ -29,7 +29,7 @@ export class CommentEngine {
     documentContent: string,
     body: string,
     paragraphIndex: number,
-    selection?: { startOffset: number; endOffset: number; selectedText: string; endParagraphIndex?: number },
+    selection?: { startOffset: number; endOffset: number; selectedText: string; endParagraphIndex?: number; startTCIdx?: number; endTCIdx?: number },
   ): Promise<CommentFile> {
     const file = await this.getOrCreate(documentPath, documentContent);
 
@@ -42,6 +42,9 @@ export class CommentEngine {
       if (selection.endParagraphIndex != null && selection.endParagraphIndex !== paragraphIndex) {
         anchor.endParagraphIndex = selection.endParagraphIndex;
       }
+      // Preserve DOM-level TC indices for accurate cross-cell highlighting
+      if (selection.startTCIdx != null) (anchor as any).startTCIdx = selection.startTCIdx;
+      if (selection.endTCIdx != null) (anchor as any).endTCIdx = selection.endTCIdx;
     } else {
       anchor = this.resolver.buildAnchor(documentContent, paragraphIndex);
     }
